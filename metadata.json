@@ -1,0 +1,6 @@
+{
+  "name": "SimBridge",
+  "description": "پل ارتباطی بلوتوث و وای‌فای برای هدایت تماس، پیامک و اشتراک‌گذاری انتخابی اینترنت بین دو گوشی اندرویدی",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

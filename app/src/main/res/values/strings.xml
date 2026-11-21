@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">SimBridge</string>
+    <string name="channel_bridge_name">اتصال بلوتوث SimBridge</string>
+    <string name="channel_bridge_desc">سرویس پس‌زمینه پل تماس، پیامک و اینترنت</string>
+    <string name="channel_alerts_name">هشدار تماس و پیامک</string>
+    <string name="channel_alerts_desc">اعلان تماس‌های ورودی و پیامک‌های هدایت‌شده</string>
+    <string name="bridge_notif_title">SimBridge فعال است</string>
+    <string name="bridge_notif_host_waiting">در انتظار اتصال گوشی دوم از طریق بلوتوث…</string>
+    <string name="bridge_notif_connected">متصل به %1$s</string>
+</resources>
