@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.LayoutDirection
@@ -47,6 +48,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.model.CallBridgeState
 import com.example.model.DeviceRole
+import com.example.system.SmsStore
 import com.example.ui.MainViewModel
 import com.example.ui.components.IncomingCallBridgeDialog
 import com.example.ui.navigation.SimBridgeRoutes
@@ -86,11 +88,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleShareIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+        if (intent == null) return
+        if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val text = intent.getStringExtra(Intent.EXTRA_TEXT)
             if (!text.isNullOrBlank()) {
                 viewModel.handleIncomingSharedText(text)
             }
+        } else if (intent.action == Intent.ACTION_SENDTO) {
+            // درخواست «ارسال پیامک» از برنامه‌های دیگر (مثلاً دفترچه تلفن)
+            val number = intent.data?.schemeSpecificPart
+                ?.substringBefore('?')
+                ?.trim()
+                .orEmpty()
+            val body = intent.getStringExtra("sms_body")
+                ?: intent.getStringExtra(Intent.EXTRA_TEXT)
+                ?: ""
+            viewModel.prefillSms(number, body)
         }
     }
 }
@@ -102,6 +115,12 @@ fun SimBridgeApp(viewModel: MainViewModel) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: SimBridgeRoutes.ROUTE_DASHBOARD
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val smsRoleLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        viewModel.refreshSystemStatus()
+    }
 
     val requiredPermissions = remember(uiState.settings.deviceRole) {
         buildList {
@@ -113,6 +132,10 @@ fun SimBridgeApp(viewModel: MainViewModel) {
             add(Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (uiState.settings.deviceRole == DeviceRole.COMPANION_NO_SIM) {
+                add(Manifest.permission.READ_CONTACTS)
+                add(Manifest.permission.CALL_PHONE)
             }
             if (uiState.settings.deviceRole == DeviceRole.HOST_SIM) {
                 add(Manifest.permission.READ_PHONE_STATE)
@@ -246,7 +269,15 @@ fun SimBridgeApp(viewModel: MainViewModel) {
                             onSendTestRing = viewModel::simulateTestIncomingRingToPeer,
                             onToggleRingOnCompanion = viewModel::toggleRingOnCompanion,
                             onToggleVibrateOnCall = viewModel::toggleVibrateOnCall,
-                            onNavigateToInternet = { navigateTo(SimBridgeRoutes.ROUTE_INTERNET) }
+                            onNavigateToInternet = { navigateTo(SimBridgeRoutes.ROUTE_INTERNET) },
+                            onSaveSecurityCode = viewModel::saveSecurityCode,
+                            onToggleSilenceHostRinger = viewModel::toggleSilenceHostRinger,
+                            onOpenDndAccess = viewModel::openDndAccessSettings,
+                            onRequestIgnoreBattery = viewModel::requestIgnoreBatteryOptimizations,
+                            onOpenCallAccountSettings = viewModel::openCallAccountSettings,
+                            onRequestDefaultSms = {
+                                SmsStore.requestDefaultSmsIntent(context)?.let { smsRoleLauncher.launch(it) }
+                            }
                         )
                     }
                     composable(SimBridgeRoutes.ROUTE_CALL) {

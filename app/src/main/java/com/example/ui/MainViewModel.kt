@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Intent
+import android.provider.Settings
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,6 +19,11 @@ import com.example.model.InternetShareMode
 import com.example.model.NetworkTelemetryUi
 import com.example.model.PairedDeviceUi
 import com.example.model.SmsEventUi
+import com.example.system.ContactsHelper
+import com.example.system.PowerHelper
+import com.example.system.RingerSilencer
+import com.example.system.SmsStore
+import com.example.telecom.BridgeTelecom
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,6 +57,11 @@ data class SimBridgeUiState(
     val hasSmsPerms: Boolean = false,
     val hasMicPerm: Boolean = false,
     val hasNotificationPerm: Boolean = false,
+    val hasContactsPerm: Boolean = false,
+    val isIgnoringBatteryOpt: Boolean = true,
+    val isDefaultSmsApp: Boolean = false,
+    val isCallAccountEnabled: Boolean = false,
+    val hasDndAccess: Boolean = true,
     val isBluetoothEnabled: Boolean = false,
     val isBluetoothSupported: Boolean = true,
     val statusBannerMessage: String? = null
@@ -63,6 +75,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val telephony = app.telephonyHelper
     private val tethering = app.tetheringHelper
     private val coordinator = app.coordinator
+    private val ringerSilencer = RingerSilencer(application)
 
     private val _uiState = MutableStateFlow(SimBridgeUiState())
     val uiState: StateFlow<SimBridgeUiState> = _uiState.asStateFlow()
@@ -182,6 +195,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 hasSmsPerms = telephony.hasSmsPermissions(),
                 hasMicPerm = hasMic,
                 hasNotificationPerm = hasNotif,
+                hasContactsPerm = ContactsHelper.hasPermission(app),
+                isIgnoringBatteryOpt = PowerHelper.isIgnoringBatteryOptimizations(app),
+                isDefaultSmsApp = SmsStore.isDefaultSmsApp(app),
+                isCallAccountEnabled = BridgeTelecom.isAccountEnabled(app),
+                hasDndAccess = ringerSilencer.hasPolicyAccess(),
                 isBluetoothEnabled = bt.isBluetoothEnabled(),
                 isBluetoothSupported = bt.isBluetoothSupported()
             )
@@ -263,6 +281,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (bt.linkState.value != BluetoothLinkState.CONNECTED) {
                 _uiState.update {
                     it.copy(statusBannerMessage = "برای شماره‌گیری با سیم‌کارت گوشی اول، ابتدا بلوتوث را متصل کنید.")
+                }
+                return
+            }
+            // اگر حساب تماس SimBridge فعال باشد، تماس با صفحه تماس خود گوشی برقرار می‌شود
+            if (BridgeTelecom.placeCall(app, number)) {
+                _uiState.update {
+                    it.copy(
+                        dialerInput = "",
+                        statusBannerMessage = "تماس با $number از طریق سیستم تماس گوشی شروع شد."
+                    )
                 }
                 return
             }
@@ -396,6 +424,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     secondaryText = body
                 )
             )
+            SmsStore.insertSent(app, recipient, body)
             viewModelScope.launch {
                 repo.addSmsLog(recipient, body, "OUTGOING_RELAY", "ارسال فرمان پیامک به گوشی اول")
             }
@@ -531,6 +560,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleVibrateOnCall(enabled: Boolean) {
         viewModelScope.launch { repo.setVibrateOnCall(enabled) }
+    }
+
+    fun toggleSilenceHostRinger(enabled: Boolean) {
+        viewModelScope.launch { repo.setSilenceHostRinger(enabled) }
+    }
+
+    fun saveSecurityCode(code: String) {
+        val clean = code.trim()
+        viewModelScope.launch {
+            repo.setSecurityCode(clean)
+            bt.securityCode = clean
+        }
+        _uiState.update {
+            it.copy(
+                statusBannerMessage = if (clean.isEmpty()) {
+                    "کد امنیتی خالی است؛ برای امنیت واقعی در هر دو گوشی یک کد یکسان وارد کنید."
+                } else {
+                    "کد امنیتی ذخیره شد. در هر دو گوشی باید یکسان باشد؛ بعد دوباره وصل شوید."
+                }
+            )
+        }
+    }
+
+    fun requestIgnoreBatteryOptimizations() {
+        if (!startSettingsIntent(PowerHelper.requestIgnoreIntent(app))) {
+            startSettingsIntent(PowerHelper.appDetailsIntent(app))
+        }
+    }
+
+    fun openDndAccessSettings() {
+        startSettingsIntent(
+            Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+    }
+
+    fun openCallAccountSettings() {
+        if (!startSettingsIntent(BridgeTelecom.callAccountSettingsIntent())) {
+            _uiState.update {
+                it.copy(
+                    statusBannerMessage = "تنظیمات را دستی باز کنید: برنامه تلفن ← تنظیمات ← حساب‌های تماس ← SimBridge را روشن کنید."
+                )
+            }
+        }
+    }
+
+    fun prefillSms(number: String, body: String) {
+        _uiState.update {
+            it.copy(
+                smsRecipientInput = number.ifBlank { it.smsRecipientInput },
+                smsBodyInput = body.ifBlank { it.smsBodyInput },
+                statusBannerMessage = "شماره و متن پیامک در بخش «پیامک» بارگذاری شد."
+            )
+        }
+    }
+
+    private fun startSettingsIntent(intent: Intent): Boolean {
+        return try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            app.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun clearCallLogs() {

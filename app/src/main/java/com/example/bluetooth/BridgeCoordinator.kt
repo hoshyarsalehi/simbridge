@@ -1,6 +1,7 @@
 package com.example.bluetooth
 
 import android.content.Context
+import com.example.data.preferences.BridgeSettings
 import com.example.data.repository.BridgeRepository
 import com.example.model.BluetoothLinkState
 import com.example.model.BridgePacket
@@ -8,14 +9,21 @@ import com.example.model.BridgePacketType
 import com.example.model.CallBridgeState
 import com.example.model.DeviceRole
 import com.example.model.InternetShareMode
+import com.example.system.ContactsHelper
+import com.example.system.RingerSilencer
+import com.example.system.SmsStore
 import com.example.system.TelephonyBridgeHelper
+import com.example.telecom.BridgeTelecom
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class BridgeCoordinator(
@@ -25,6 +33,7 @@ class BridgeCoordinator(
     private val telephonyHelper: TelephonyBridgeHelper
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val ringerSilencer = RingerSilencer(context)
 
     private val _activeCallState = MutableStateFlow(CallBridgeState.IDLE)
     val activeCallState: StateFlow<CallBridgeState> = _activeCallState.asStateFlow()
@@ -43,10 +52,53 @@ class BridgeCoordinator(
 
     private var lastHostCallState = CallBridgeState.IDLE
 
+    @Volatile
+    private var companionCallState = CallBridgeState.IDLE
+
     fun start() {
+        // اگر برنامه وسط زنگ بسته شده بود، حالت زنگ گوشی برگردانده شود
+        ringerSilencer.restore()
+        observeSettings()
+        observeLinkState()
         observeHostCallEvents()
         observeHostSmsEvents()
         observeBluetoothPackets()
+    }
+
+    private fun observeSettings() {
+        scope.launch {
+            repository.settingsFlow.collect { settings ->
+                bluetoothManager.securityCode = settings.securityCode
+            }
+        }
+        // حساب تماس سیستمی فقط روی گوشی دوم ثبت می‌شود
+        scope.launch {
+            repository.settingsFlow
+                .map { it.deviceRole }
+                .distinctUntilChanged()
+                .collect { role ->
+                    if (role == DeviceRole.COMPANION_NO_SIM) {
+                        BridgeTelecom.registerAccount(context)
+                    } else {
+                        BridgeTelecom.unregisterAccount(context)
+                    }
+                }
+        }
+    }
+
+    private fun observeLinkState() {
+        scope.launch {
+            bluetoothManager.linkState.collect { state ->
+                if (state != BluetoothLinkState.CONNECTED) {
+                    ringerSilencer.restore()
+                    BridgeTelecom.onLinkLost()
+                    if (_activeCallState.value != CallBridgeState.IDLE) {
+                        _activeCallState.value = CallBridgeState.IDLE
+                    }
+                    BridgeForegroundService.stopIncomingRingAlert(context)
+                }
+            }
+        }
     }
 
     private fun observeHostCallEvents() {
@@ -62,7 +114,18 @@ class BridgeCoordinator(
                     _incomingCallerLabel.value = payload.phoneNumber
                 }
 
-                if (bluetoothManager.linkState.value == BluetoothLinkState.CONNECTED) {
+                val connected = bluetoothManager.linkState.value == BluetoothLinkState.CONNECTED
+
+                // فقط گوشی دوم زنگ بخورد
+                if (settings.silenceHostRinger && connected &&
+                    payload.state == CallBridgeState.INCOMING_RINGING
+                ) {
+                    ringerSilencer.silence()
+                } else if (payload.state != CallBridgeState.INCOMING_RINGING) {
+                    ringerSilencer.restore()
+                }
+
+                if (connected) {
                     bluetoothManager.sendPacket(
                         BridgePacket(
                             type = BridgePacketType.CALL_ALERT.name,
@@ -119,35 +182,7 @@ class BridgeCoordinator(
             bluetoothManager.incomingPackets.collect { packet ->
                 val settings = repository.settingsFlow.first()
                 when (packet.type) {
-                    BridgePacketType.CALL_ALERT.name -> {
-                        val state = CallBridgeState.entries.firstOrNull {
-                            it.name == packet.primaryText
-                        } ?: CallBridgeState.IDLE
-
-                        _activeCallState.value = state
-                        _incomingCallerLabel.value = packet.secondaryText
-
-                        when (state) {
-                            CallBridgeState.INCOMING_RINGING -> {
-                                BridgeForegroundService.triggerIncomingRingAlert(
-                                    context = context,
-                                    callerLabel = packet.secondaryText,
-                                    playRingtone = settings.ringOnCompanion,
-                                    vibrate = settings.vibrateOnCall
-                                )
-                                repository.addCallLog(
-                                    phoneNumber = packet.secondaryText.ifBlank { "تماس ورودی گوشی اول" },
-                                    direction = "INCOMING",
-                                    status = "زنگ خوردن روی گوشی دوم"
-                                )
-                            }
-                            CallBridgeState.ACTIVE_BRIDGE,
-                            CallBridgeState.IDLE -> {
-                                BridgeForegroundService.stopIncomingRingAlert(context)
-                            }
-                            else -> Unit
-                        }
-                    }
+                    BridgePacketType.CALL_ALERT.name -> handleCallAlert(packet, settings)
 
                     BridgePacketType.DIAL_REQUEST.name -> {
                         val number = packet.primaryText.trim()
@@ -219,22 +254,7 @@ class BridgeCoordinator(
                         _eventsBanner.value = "${packet.primaryText}: ${packet.secondaryText}"
                     }
 
-                    BridgePacketType.SMS_FORWARD_TEXT.name -> {
-                        val sender = packet.primaryText.ifBlank { "پیامک گوشی اول" }
-                        val body = packet.secondaryText
-                        repository.addSmsLog(
-                            peer = sender,
-                            body = body,
-                            direction = "INCOMING_SHARED",
-                            status = "هدایت خودکار از سیم‌کارت گوشی اول"
-                        )
-                        BridgeForegroundService.showSmsRelayNotification(
-                            context = context,
-                            title = "پیامک جدید از $sender",
-                            body = body
-                        )
-                        _eventsBanner.value = "پیامک جدید از $sender دریافت شد."
-                    }
+                    BridgePacketType.SMS_FORWARD_TEXT.name -> handleForwardedSms(packet)
 
                     BridgePacketType.SMS_SYNC_REQUEST.name -> {
                         if (settings.deviceRole == DeviceRole.HOST_SIM) {
@@ -245,7 +265,8 @@ class BridgeCoordinator(
                                         type = BridgePacketType.SMS_FORWARD_TEXT.name,
                                         timestamp = sms.timestamp,
                                         primaryText = sms.sender,
-                                        secondaryText = sms.body
+                                        secondaryText = sms.body,
+                                        flag = true // پیام همگام‌سازی؛ تکراری‌ها نادیده گرفته می‌شوند
                                     )
                                 )
                             }
@@ -277,6 +298,156 @@ class BridgeCoordinator(
                 }
             }
         }
+    }
+
+    // ───────────────────────── تماس روی گوشی دوم ─────────────────────────
+
+    private fun handleCallAlert(packet: BridgePacket, settings: BridgeSettings) {
+        val state = CallBridgeState.entries.firstOrNull { it.name == packet.primaryText }
+            ?: CallBridgeState.IDLE
+        val rawLabel = packet.secondaryText
+        val number = if (rawLabel.any { it.isDigit() }) rawLabel else ""
+        val displayLabel = ContactsHelper.lookupName(context, number) ?: rawLabel
+        companionCallState = state
+
+        when (state) {
+            CallBridgeState.INCOMING_RINGING -> {
+                _incomingCallerLabel.value = displayLabel
+                scope.launch {
+                    repository.addCallLog(
+                        phoneNumber = displayLabel.ifBlank { "تماس ورودی گوشی اول" },
+                        direction = "INCOMING",
+                        status = "زنگ خوردن روی گوشی دوم"
+                    )
+                }
+                val viaSystem = BridgeTelecom.addIncomingCall(context, number)
+                if (viaSystem) {
+                    // اگر سیستم تماس ظرف چند ثانیه تماس را نپذیرفت (حساب فعال نیست)، زنگ خود برنامه فعال می‌شود
+                    scope.launch {
+                        delay(2000)
+                        if (BridgeTelecom.currentConnection == null &&
+                            companionCallState == CallBridgeState.INCOMING_RINGING
+                        ) {
+                            startFallbackAlert(displayLabel, settings)
+                        }
+                    }
+                } else {
+                    startFallbackAlert(displayLabel, settings)
+                }
+            }
+
+            CallBridgeState.ACTIVE_BRIDGE,
+            CallBridgeState.IDLE -> {
+                _activeCallState.value = state
+                _incomingCallerLabel.value = displayLabel
+                BridgeForegroundService.stopIncomingRingAlert(context)
+                BridgeTelecom.onHostCallState(context, state)
+            }
+
+            else -> {
+                _activeCallState.value = state
+            }
+        }
+    }
+
+    private fun startFallbackAlert(label: String, settings: BridgeSettings) {
+        _activeCallState.value = CallBridgeState.INCOMING_RINGING
+        BridgeForegroundService.triggerIncomingRingAlert(
+            context = context,
+            callerLabel = label,
+            playRingtone = settings.ringOnCompanion,
+            vibrate = settings.vibrateOnCall
+        )
+    }
+
+    /** شماره‌گیری از صفحه تماس سیستم گوشی دوم */
+    fun requestDial(number: String) {
+        bluetoothManager.sendPacket(
+            BridgePacket(type = BridgePacketType.DIAL_REQUEST.name, primaryText = number)
+        )
+        scope.launch {
+            repository.addCallLog(number, "OUTGOING", "شماره‌گیری از طریق سیم‌کارت گوشی اول")
+        }
+    }
+
+    /** پاسخ از صفحه تماس سیستم گوشی دوم */
+    fun answerFromTelecom() {
+        BridgeForegroundService.stopIncomingRingAlert(context)
+        bluetoothManager.sendPacket(
+            BridgePacket(type = BridgePacketType.CALL_CONTROL_REQUEST.name, primaryText = "ANSWER")
+        )
+        bluetoothManager.startVoiceBridge()
+    }
+
+    /** پایان یا رد تماس از صفحه تماس سیستم گوشی دوم */
+    fun endFromTelecom() {
+        BridgeForegroundService.stopIncomingRingAlert(context)
+        bluetoothManager.stopVoiceBridge()
+        bluetoothManager.sendPacket(
+            BridgePacket(type = BridgePacketType.CALL_CONTROL_REQUEST.name, primaryText = "END")
+        )
+    }
+
+    fun startVoiceForTelecom() {
+        bluetoothManager.startVoiceBridge()
+    }
+
+    // ───────────────────────── پیامک روی گوشی دوم ─────────────────────────
+
+    private suspend fun handleForwardedSms(packet: BridgePacket) {
+        val sender = packet.primaryText.ifBlank { "پیامک گوشی اول" }
+        val body = packet.secondaryText
+        val result = SmsStore.insertInbox(
+            context = context,
+            address = sender,
+            body = body,
+            date = packet.timestamp,
+            checkDuplicate = packet.flag
+        )
+        if (result == SmsStore.Result.DUPLICATE) return
+
+        val name = ContactsHelper.lookupName(context, sender)
+        val shownSender = name ?: sender
+        repository.addSmsLog(
+            peer = shownSender,
+            body = body,
+            direction = "INCOMING_SHARED",
+            status = if (result == SmsStore.Result.STORED) {
+                "ذخیره در پیامک‌های گوشی دوم"
+            } else {
+                "هدایت خودکار از سیم‌کارت گوشی اول"
+            }
+        )
+        BridgeForegroundService.showSmsRelayNotification(
+            context = context,
+            title = "پیامک جدید از $shownSender",
+            body = body
+        )
+        _eventsBanner.value = if (result == SmsStore.Result.NOT_DEFAULT) {
+            "پیامک جدید از $shownSender دریافت شد. برای رفتن پیام‌ها به بخش پیامک گوشی، برنامه را پیامک پیش‌فرض کنید."
+        } else {
+            "پیامک جدید از $shownSender دریافت شد."
+        }
+    }
+
+    /** ارسال پیامک گوشی دوم از طریق سیم‌کارت گوشی اول */
+    fun relaySmsToHost(recipient: String, body: String): Boolean {
+        if (bluetoothManager.linkState.value != BluetoothLinkState.CONNECTED) {
+            _eventsBanner.value = "برای ارسال پیامک، بلوتوث باید به گوشی اول متصل باشد."
+            return false
+        }
+        bluetoothManager.sendPacket(
+            BridgePacket(
+                type = BridgePacketType.SMS_RELAY_REQUEST.name,
+                primaryText = recipient,
+                secondaryText = body
+            )
+        )
+        SmsStore.insertSent(context, recipient, body)
+        scope.launch {
+            repository.addSmsLog(recipient, body, "OUTGOING_RELAY", "ارسال فرمان پیامک به گوشی اول")
+        }
+        return true
     }
 
     fun clearCallAlertState() {

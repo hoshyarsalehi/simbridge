@@ -1,11 +1,13 @@
 package com.example.bluetooth
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.Ringtone
 import android.media.RingtoneManager
@@ -20,11 +22,13 @@ import com.example.MainActivity
 import com.example.R
 import com.example.SimBridgeApplication
 import com.example.model.BluetoothLinkState
+import com.example.model.DeviceRole
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class BridgeForegroundService : Service() {
@@ -198,18 +202,24 @@ class BridgeForegroundService : Service() {
             app.bluetoothManager.connectedDeviceName.value
         )
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIF_SERVICE_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            )
-        } else {
-            startForeground(NOTIF_SERVICE_ID, notification)
+        promoteToForeground(notification)
+
+        // اگر سیستم سرویس را بعد از بسته شدن دوباره ساخته است، اتصال را خودکار برگردان
+        if (intent == null) {
+            serviceScope.launch {
+                val settings = app.repository.settingsFlow.first()
+                if (settings.deviceRole == DeviceRole.HOST_SIM) {
+                    app.telephonyHelper.startObservingCallState()
+                    app.bluetoothManager.startHostServer()
+                } else if (settings.lastDeviceAddress.isNotBlank()) {
+                    app.bluetoothManager.connectToHost(settings.lastDeviceAddress)
+                }
+            }
         }
 
         when (intent?.action) {
             ACTION_START_HOST -> {
+                app.telephonyHelper.startObservingCallState()
                 app.bluetoothManager.startHostServer()
             }
             ACTION_CONNECT_COMPANION -> {
@@ -229,6 +239,35 @@ class BridgeForegroundService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    private fun promoteToForeground(notification: Notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            val micGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && micGranted) {
+                // برای ادامه کار میکروفون وقتی برنامه بسته یا صفحه خاموش است
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            try {
+                startForeground(NOTIF_SERVICE_ID, notification, type)
+            } catch (_: Exception) {
+                try {
+                    startForeground(
+                        NOTIF_SERVICE_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                    )
+                } catch (_: Exception) {
+                    startForeground(NOTIF_SERVICE_ID, notification)
+                }
+            }
+        } else {
+            startForeground(NOTIF_SERVICE_ID, notification)
+        }
     }
 
     private fun buildServiceNotification(

@@ -187,6 +187,17 @@ class TelephonyBridgeHelper(private val context: Context) {
     fun placeDirectCall(phoneNumber: String): Boolean {
         val clean = phoneNumber.trim()
         if (clean.isEmpty()) return false
+        if (hasCallPhonePermission()) {
+            // از پس‌زمینه هم کار می‌کند (بر خلاف باز کردن صفحه با Intent)
+            try {
+                val tm = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
+                if (tm != null) {
+                    tm.placeCall(Uri.fromParts("tel", clean, null), null)
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
         val action = if (hasCallPhonePermission()) Intent.ACTION_CALL else Intent.ACTION_DIAL
         return try {
             val intent = Intent(action, Uri.parse("tel:${Uri.encode(clean)}")).apply {

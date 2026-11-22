@@ -56,6 +56,10 @@ class BridgeRepository(
 
     suspend fun setVibrateOnCall(enabled: Boolean) = prefs.setVibrateOnCall(enabled)
 
+    suspend fun setSilenceHostRinger(enabled: Boolean) = prefs.setSilenceHostRinger(enabled)
+
+    suspend fun setSecurityCode(code: String) = prefs.setSecurityCode(code)
+
     suspend fun addCallLog(phoneNumber: String, direction: String, status: String) {
         dao.insertCallLog(
             CallLogEntity(

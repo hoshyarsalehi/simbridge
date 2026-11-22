@@ -24,7 +24,9 @@ data class BridgeSettings(
     val hotspotSsid: String = "",
     val hotspotPassword: String = "",
     val ringOnCompanion: Boolean = true,
-    val vibrateOnCall: Boolean = true
+    val vibrateOnCall: Boolean = true,
+    val silenceHostRinger: Boolean = true,
+    val securityCode: String = ""
 )
 
 class BridgePreferences(private val context: Context) {
@@ -38,6 +40,8 @@ class BridgePreferences(private val context: Context) {
         val HOTSPOT_PASSWORD = stringPreferencesKey("hotspot_password")
         val RING_ON_COMPANION = booleanPreferencesKey("ring_on_companion")
         val VIBRATE_ON_CALL = booleanPreferencesKey("vibrate_on_call")
+        val SILENCE_HOST_RINGER = booleanPreferencesKey("silence_host_ringer")
+        val SECURITY_CODE = stringPreferencesKey("security_code")
     }
 
     val settingsFlow: Flow<BridgeSettings> = context.simBridgeDataStore.data.map { prefs ->
@@ -57,7 +61,9 @@ class BridgePreferences(private val context: Context) {
             hotspotSsid = prefs[Keys.HOTSPOT_SSID] ?: "",
             hotspotPassword = prefs[Keys.HOTSPOT_PASSWORD] ?: "",
             ringOnCompanion = prefs[Keys.RING_ON_COMPANION] ?: true,
-            vibrateOnCall = prefs[Keys.VIBRATE_ON_CALL] ?: true
+            vibrateOnCall = prefs[Keys.VIBRATE_ON_CALL] ?: true,
+            silenceHostRinger = prefs[Keys.SILENCE_HOST_RINGER] ?: true,
+            securityCode = prefs[Keys.SECURITY_CODE] ?: ""
         )
     }
 
@@ -89,5 +95,13 @@ class BridgePreferences(private val context: Context) {
 
     suspend fun setVibrateOnCall(enabled: Boolean) {
         context.simBridgeDataStore.edit { it[Keys.VIBRATE_ON_CALL] = enabled }
+    }
+
+    suspend fun setSilenceHostRinger(enabled: Boolean) {
+        context.simBridgeDataStore.edit { it[Keys.SILENCE_HOST_RINGER] = enabled }
+    }
+
+    suspend fun setSecurityCode(code: String) {
+        context.simBridgeDataStore.edit { it[Keys.SECURITY_CODE] = code }
     }
 }

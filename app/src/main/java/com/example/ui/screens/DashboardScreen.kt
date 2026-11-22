@@ -62,6 +62,7 @@ import com.example.model.BluetoothLinkState
 import com.example.model.DeviceRole
 import com.example.model.PairedDeviceUi
 import com.example.ui.SimBridgeUiState
+import com.example.ui.components.AdvancedSettingsCard
 import com.example.ui.components.ConnectionStatusBadge
 import com.example.ui.components.PermissionRequestBanner
 import com.example.ui.theme.JetBrainsMonoFontFamily
@@ -80,6 +81,12 @@ fun DashboardScreen(
     onToggleRingOnCompanion: (Boolean) -> Unit,
     onToggleVibrateOnCall: (Boolean) -> Unit,
     onNavigateToInternet: () -> Unit,
+    onSaveSecurityCode: (String) -> Unit,
+    onToggleSilenceHostRinger: (Boolean) -> Unit,
+    onOpenDndAccess: () -> Unit,
+    onRequestIgnoreBattery: () -> Unit,
+    onOpenCallAccountSettings: () -> Unit,
+    onRequestDefaultSms: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isHost = uiState.settings.deviceRole == DeviceRole.HOST_SIM
@@ -87,6 +94,8 @@ fun DashboardScreen(
         if (!uiState.hasBluetoothPerms) add("بلوتوث")
         if (!uiState.hasMicPerm) add("میکروفون پل صوتی")
         if (!uiState.hasNotificationPerm) add("اعلان‌ها")
+        if (!isHost && !uiState.hasContactsPerm) add("مخاطبین")
+        if (!isHost && !uiState.hasCallPhonePerm) add("تماس از صفحه تماس گوشی")
         if (isHost) {
             if (!uiState.hasPhoneStatePerm) add("وضعیت تماس")
             if (!uiState.hasCallLogPerm) add("شماره تماس ورودی")
@@ -514,6 +523,18 @@ fun DashboardScreen(
                         }
                     }
                 }
+            }
+
+            item {
+                AdvancedSettingsCard(
+                    uiState = uiState,
+                    onSaveSecurityCode = onSaveSecurityCode,
+                    onToggleSilenceHostRinger = onToggleSilenceHostRinger,
+                    onOpenDndAccess = onOpenDndAccess,
+                    onRequestIgnoreBattery = onRequestIgnoreBattery,
+                    onOpenCallAccountSettings = onOpenCallAccountSettings,
+                    onRequestDefaultSms = onRequestDefaultSms
+                )
             }
 
             item { Spacer(modifier = Modifier.height(12.dp)) }
