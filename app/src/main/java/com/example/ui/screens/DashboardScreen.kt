@@ -87,6 +87,7 @@ fun DashboardScreen(
     onRequestIgnoreBattery: () -> Unit,
     onOpenCallAccountSettings: () -> Unit,
     onRequestDefaultSms: () -> Unit,
+    onRunAudioTest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isHost = uiState.settings.deviceRole == DeviceRole.HOST_SIM
@@ -533,7 +534,8 @@ fun DashboardScreen(
                     onOpenDndAccess = onOpenDndAccess,
                     onRequestIgnoreBattery = onRequestIgnoreBattery,
                     onOpenCallAccountSettings = onOpenCallAccountSettings,
-                    onRequestDefaultSms = onRequestDefaultSms
+                    onRequestDefaultSms = onRequestDefaultSms,
+                    onRunAudioTest = onRunAudioTest
                 )
             }
 

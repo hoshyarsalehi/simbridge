@@ -275,6 +275,7 @@ fun SimBridgeApp(viewModel: MainViewModel) {
                             onOpenDndAccess = viewModel::openDndAccessSettings,
                             onRequestIgnoreBattery = viewModel::requestIgnoreBatteryOptimizations,
                             onOpenCallAccountSettings = viewModel::openCallAccountSettings,
+                            onRunAudioTest = viewModel::runCallAudioTest,
                             onRequestDefaultSms = {
                                 SmsStore.requestDefaultSmsIntent(context)?.let { smsRoleLauncher.launch(it) }
                             }

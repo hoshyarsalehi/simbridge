@@ -60,6 +60,8 @@ class BridgeRepository(
 
     suspend fun setSecurityCode(code: String) = prefs.setSecurityCode(code)
 
+    suspend fun setHostAudioSource(source: Int) = prefs.setHostAudioSource(source)
+
     suspend fun addCallLog(phoneNumber: String, direction: String, status: String) {
         dao.insertCallLog(
             CallLogEntity(

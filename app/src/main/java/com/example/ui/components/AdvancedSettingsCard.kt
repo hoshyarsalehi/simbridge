@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.model.DeviceRole
 import com.example.ui.SimBridgeUiState
+import java.security.SecureRandom
 
 @Composable
 fun AdvancedSettingsCard(
@@ -33,6 +34,7 @@ fun AdvancedSettingsCard(
     onRequestIgnoreBattery: () -> Unit,
     onOpenCallAccountSettings: () -> Unit,
     onRequestDefaultSms: () -> Unit,
+    onRunAudioTest: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isHost = uiState.settings.deviceRole == DeviceRole.HOST_SIM
@@ -67,6 +69,12 @@ fun AdvancedSettingsCard(
                 singleLine = true,
                 label = { Text("کد امنیتی") }
             )
+            OutlinedButton(
+                onClick = { code = generateSecurityCode() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("ساخت کد تصادفی قوی")
+            }
             Button(
                 onClick = { onSaveSecurityCode(code) },
                 modifier = Modifier.fillMaxWidth()
@@ -93,6 +101,25 @@ fun AdvancedSettingsCard(
             }
 
             if (isHost) {
+                // ── تست صدای تماس ──
+                Text(
+                    text = "تست صدای تماس: وسط یک تماس زنده، همه روش‌های گرفتن صدا امتحان می‌شود و بهترین روش برای همین گوشی ذخیره می‌شود. طرف مقابل باید در طول تست صحبت کند. پل صوتی در این مدت متوقف می‌شود.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Button(
+                    onClick = onRunAudioTest,
+                    enabled = !uiState.audioTestRunning,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (uiState.audioTestRunning) "در حال تست…" else "اجرای تست صدای تماس")
+                }
+                if (uiState.audioTestSummary.isNotBlank()) {
+                    Text(
+                        text = uiState.audioTestSummary,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
                 // ── فقط گوشی دوم زنگ بخورد ──
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -159,5 +186,14 @@ fun AdvancedSettingsCard(
                 }
             }
         }
+    }
+}
+
+// حروف و اعداد بدون شکل‌های مشابه (0/O و 1/l/I) تا تایپ کردنش روی گوشی دیگر راحت باشد
+private fun generateSecurityCode(): String {
+    val chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    val random = SecureRandom()
+    return buildString {
+        repeat(10) { append(chars[random.nextInt(chars.length)]) }
     }
 }

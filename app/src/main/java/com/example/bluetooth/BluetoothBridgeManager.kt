@@ -83,6 +83,10 @@ class BluetoothBridgeManager(private val context: Context) {
     @Volatile
     var securityCode: String = ""
 
+    /** روش ضبط صدای گوشی اول که «تست صدای تماس» انتخاب کرده؛ ۰ یعنی خودکار. */
+    @Volatile
+    var preferredHostAudioSource: Int = 0
+
     private val _linkState = MutableStateFlow(BluetoothLinkState.DISCONNECTED)
     val linkState: StateFlow<BluetoothLinkState> = _linkState.asStateFlow()
 
@@ -596,13 +600,8 @@ class BluetoothBridgeManager(private val context: Context) {
             }
 
             try {
-                recorder = AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    minRecBuf
-                )
+                recorder = createRecorder(hostSide, minRecBuf)
+                    ?: throw IllegalStateException("recorder_unavailable")
                 player = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
@@ -630,16 +629,32 @@ class BluetoothBridgeManager(private val context: Context) {
                     modeChanged = true
                 }
 
-                recorder.startRecording()
                 player.play()
 
                 val sendJob = launch {
                     val out = socket.outputStream
                     val buf = ByteArray(1024)
+                    var checkedBuffers = 0
+                    var peak = 0
                     while (isActive && _voiceBridgeActive.value && socket.isConnected) {
                         val read = recorder.read(buf, 0, buf.size)
                         if (read > 0) {
                             out.write(buf, 0, read)
+                            // گوشی اول: اگر در ~۲ ثانیه اول هیچ صدایی ضبط نشود، به کاربر خبر بده
+                            if (hostSide && checkedBuffers < 60) {
+                                var i = 0
+                                while (i + 1 < read) {
+                                    val sample = ((buf[i + 1].toInt() shl 8) or (buf[i].toInt() and 0xFF)).toShort().toInt()
+                                    val amp = if (sample < 0) -sample else sample
+                                    if (amp > peak) peak = amp
+                                    i += 2
+                                }
+                                checkedBuffers++
+                                if (checkedBuffers == 60 && peak < 8) {
+                                    _errorMessage.value =
+                                        "میکروفون گوشی اول در طول تماس بی‌صدا است؛ اندروید این گوشی اجازه انتقال صدای تماس را به برنامه نمی‌دهد."
+                                }
+                            }
                         }
                     }
                 }
@@ -657,6 +672,10 @@ class BluetoothBridgeManager(private val context: Context) {
                 receiveJob.join()
                 sendJob.cancel()
             } catch (_: Exception) {
+                if (recorder == null) {
+                    _errorMessage.value =
+                        "شروع ضبط صدا ممکن نشد؛ میکروفون در اختیار تماس است یا مجوز میکروفون داده نشده."
+                }
             } finally {
                 try {
                     recorder?.stop()
@@ -687,6 +706,52 @@ class BluetoothBridgeManager(private val context: Context) {
                 _voiceBridgeActive.value = false
             }
         }
+    }
+
+    /**
+     * گوشی اول: اول صدای طرف مقابل تماس مستقیم گرفته می‌شود (اگر اندروید گوشی اجازه دهد)،
+     * وگرنه میکروفون معمولی. گوشی دوم: میکروفون مخصوص مکالمه.
+     */
+    private fun createRecorder(hostSide: Boolean, bufferSize: Int): AudioRecord? {
+        val sources = if (hostSide) {
+            val defaults = listOf(
+                MediaRecorder.AudioSource.VOICE_DOWNLINK,
+                MediaRecorder.AudioSource.VOICE_CALL,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            )
+            val preferred = preferredHostAudioSource
+            if (preferred != 0) {
+                listOf(preferred) + defaults.filter { it != preferred }
+            } else {
+                defaults
+            }
+        } else {
+            listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+        }
+        for (source in sources) {
+            var candidate: AudioRecord? = null
+            try {
+                candidate = AudioRecord(
+                    source,
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+                if (candidate.state == AudioRecord.STATE_INITIALIZED) {
+                    candidate.startRecording()
+                    if (candidate.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                        return candidate
+                    }
+                }
+            } catch (_: Exception) {
+            }
+            try {
+                candidate?.release()
+            } catch (_: Exception) {
+            }
+        }
+        return null
     }
 
     // ───────────────────────────── قطع اتصال ─────────────────────────────

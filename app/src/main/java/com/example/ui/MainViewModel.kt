@@ -1,9 +1,12 @@
 package com.example.ui
 
+import android.Manifest
 import android.app.Application
 import android.content.Intent
 import android.provider.Settings
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.SimBridgeApplication
@@ -19,6 +22,7 @@ import com.example.model.InternetShareMode
 import com.example.model.NetworkTelemetryUi
 import com.example.model.PairedDeviceUi
 import com.example.model.SmsEventUi
+import com.example.system.CallAudioTester
 import com.example.system.ContactsHelper
 import com.example.system.PowerHelper
 import com.example.system.RingerSilencer
@@ -62,6 +66,8 @@ data class SimBridgeUiState(
     val isDefaultSmsApp: Boolean = false,
     val isCallAccountEnabled: Boolean = false,
     val hasDndAccess: Boolean = true,
+    val audioTestRunning: Boolean = false,
+    val audioTestSummary: String = "",
     val isBluetoothEnabled: Boolean = false,
     val isBluetoothSupported: Boolean = true,
     val statusBannerMessage: String? = null
@@ -560,6 +566,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleVibrateOnCall(enabled: Boolean) {
         viewModelScope.launch { repo.setVibrateOnCall(enabled) }
+    }
+
+    /** تست صدای تماس (گوشی اول، وسط یک تماس زنده) */
+    fun runCallAudioTest() {
+        if (_uiState.value.audioTestRunning) return
+        val hasMic = ContextCompat.checkSelfPermission(
+            app,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!hasMic) {
+            _uiState.update {
+                it.copy(statusBannerMessage = "برای تست صدا، مجوز میکروفون را بدهید.")
+            }
+            return
+        }
+        if (coordinator.activeCallState.value != CallBridgeState.ACTIVE_BRIDGE) {
+            _uiState.update {
+                it.copy(
+                    audioTestSummary = "ابتدا با گوشی اول یک تماس برقرار کنید (مثلاً با یک دوست)، از او بخواهید مدام صحبت کند و در همان لحظه دوباره دکمه تست را بزنید."
+                )
+            }
+            return
+        }
+        // تست و پل صوتی هم‌زمان نمی‌توانند میکروفون را بگیرند
+        bt.stopVoiceBridge()
+        _uiState.update {
+            it.copy(
+                audioTestRunning = true,
+                audioTestSummary = "در حال تست… از طرف مقابل بخواهید بدون توقف صحبت کند."
+            )
+        }
+        viewModelScope.launch {
+            val tester = CallAudioTester(app)
+            val results = tester.run { label ->
+                _uiState.update {
+                    it.copy(audioTestSummary = "در حال تست: $label … (طرف مقابل صحبت کند)")
+                }
+            }
+            val best = tester.chooseBest(results)
+            repo.setHostAudioSource(best?.source ?: 0)
+            val summary = buildString {
+                results.forEach { r ->
+                    val state = when {
+                        !r.supported -> "پشتیبانی نمی‌شود"
+                        r.audible -> "صدا دارد ✓"
+                        else -> "بی‌صدا"
+                    }
+                    append("• ${r.label}: $state\n")
+                }
+                append("\n")
+                if (best != null) {
+                    append("روش انتخاب‌شده برای این گوشی: ${best.label}. ذخیره شد و در تماس‌های بعدی استفاده می‌شود.")
+                } else {
+                    append("هیچ روشی صدا نگرفت. چند نکته: تماس باید واقعاً فعال باشد و طرف مقابل صحبت کند؛ «تماس Wi-Fi» و VoLTE را خاموش کنید؛ صدای بلندگوی گوشی را زیاد کنید؛ دوباره تست کنید. اگر باز هم بی‌صدا بود، این گوشی اجازه انتقال صدای تماس را نمی‌دهد.")
+                }
+            }
+            _uiState.update { it.copy(audioTestRunning = false, audioTestSummary = summary) }
+        }
     }
 
     fun toggleSilenceHostRinger(enabled: Boolean) {

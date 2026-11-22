@@ -69,6 +69,7 @@ class BridgeCoordinator(
         scope.launch {
             repository.settingsFlow.collect { settings ->
                 bluetoothManager.securityCode = settings.securityCode
+                bluetoothManager.preferredHostAudioSource = settings.hostAudioSource
             }
         }
         // حساب تماس سیستمی فقط روی گوشی دوم ثبت می‌شود

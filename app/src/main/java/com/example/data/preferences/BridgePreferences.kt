@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.DeviceRole
@@ -26,7 +27,8 @@ data class BridgeSettings(
     val ringOnCompanion: Boolean = true,
     val vibrateOnCall: Boolean = true,
     val silenceHostRinger: Boolean = true,
-    val securityCode: String = ""
+    val securityCode: String = "",
+    val hostAudioSource: Int = 0
 )
 
 class BridgePreferences(private val context: Context) {
@@ -42,6 +44,7 @@ class BridgePreferences(private val context: Context) {
         val VIBRATE_ON_CALL = booleanPreferencesKey("vibrate_on_call")
         val SILENCE_HOST_RINGER = booleanPreferencesKey("silence_host_ringer")
         val SECURITY_CODE = stringPreferencesKey("security_code")
+        val HOST_AUDIO_SOURCE = intPreferencesKey("host_audio_source")
     }
 
     val settingsFlow: Flow<BridgeSettings> = context.simBridgeDataStore.data.map { prefs ->
@@ -63,7 +66,8 @@ class BridgePreferences(private val context: Context) {
             ringOnCompanion = prefs[Keys.RING_ON_COMPANION] ?: true,
             vibrateOnCall = prefs[Keys.VIBRATE_ON_CALL] ?: true,
             silenceHostRinger = prefs[Keys.SILENCE_HOST_RINGER] ?: true,
-            securityCode = prefs[Keys.SECURITY_CODE] ?: ""
+            securityCode = prefs[Keys.SECURITY_CODE] ?: "",
+            hostAudioSource = prefs[Keys.HOST_AUDIO_SOURCE] ?: 0
         )
     }
 
@@ -103,5 +107,9 @@ class BridgePreferences(private val context: Context) {
 
     suspend fun setSecurityCode(code: String) {
         context.simBridgeDataStore.edit { it[Keys.SECURITY_CODE] = code }
+    }
+
+    suspend fun setHostAudioSource(source: Int) {
+        context.simBridgeDataStore.edit { it[Keys.HOST_AUDIO_SOURCE] = source }
     }
 }
